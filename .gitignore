@@ -1,0 +1,35 @@
+# editors / caches
+.vscode
+__pycache__
+.ipynb_checkpoints
+.hydra
+outputs
+
+# assets (keep curated ones)
+assets*/
+!conf/assets
+!dsynth/assets
+
+# generated scenes / demo data / trajectories
+generated_envs
+demo_envs
+demo_envs_mp
+*.json
+*.mp4
+*.h5
+*.jpg
+*.csv
+
+# generated logs / intermediate artifacts
+*.log
+data_gen_logs/
+navigation_results/
+
+# model weights (downloaded separately, too large for git)
+*.ckpt
+*.pt
+*.pth
+*Zone.Identifier
+
+# macOS junk
+.DS_Store

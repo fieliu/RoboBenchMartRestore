@@ -1,0 +1,43 @@
+from dsynth.planning.solve import *
+from dsynth.planning.solvers import *
+
+MP_SOLUTIONS = {
+    "PickToBasketContNiveaEnv": solve_fetch_pick_to_basket_cont_one_prod_w_skills,
+    "PickToBasketContStarsEnv": solve_fetch_pick_to_basket_cont_one_prod_w_skills,
+    "PickToBasketContFantaEnv": solve_fetch_pick_to_basket_cont_one_prod_w_skills,
+    "PickToBasketContDuffEnv": solve_fetch_pick_to_basket_cont_one_prod_w_skills,
+
+    "RestockBasketToShelfContEnv": solve_fetch_restock_basket_to_shelf,
+    "RestockBasketToShelfContNiveaEnv": solve_fetch_restock_basket_to_shelf,
+    "RestockBasketToShelfContFantaEnv": solve_fetch_restock_basket_to_shelf,
+    "RestockBasketToShelfContStarsEnv": solve_fetch_restock_basket_to_shelf,
+    "RestockBasketToShelfContDuffEnv": solve_fetch_restock_basket_to_shelf,
+
+    "MoveFromBoardToBoardVanishContEnv": solve_fetch_move_to_board_cont_one_prod_w_skills,
+    "MoveFromBoardToBoardNestleContEnv": solve_fetch_move_to_board_cont_one_prod_w_skills,
+    "MoveFromBoardToBoardDuffContEnv": solve_fetch_move_to_board_cont_one_prod_w_skills,
+
+    "PickFromFloorSlamContEnv": solve_fetch_pick_from_floor_cont,
+    "PickFromFloorBeansContEnv": solve_fetch_pick_from_floor_cont,
+    "PickFromFloorFantaContEnv": solve_fetch_pick_from_floor_cont,
+    "PickFromFloorDuffContEnv": solve_fetch_pick_from_floor_cont,
+
+    "OpenDoorShowcaseContEnv": solve_fetch_open_door_showcase_cont,
+    "OpenDoorFridgeContEnv": solve_fetch_open_door_fridge_cont,
+
+    "CloseDoorShowcaseContEnv": solve_fetch_close_door_showcase_cont,
+    "CloseDoorFridgeContEnv": solve_fetch_close_door_fridge_cont,
+}
+
+R1_MP_SOLUTIONS = {
+    "PickToBasketContNiveaEnv": solve_r1_pick_to_basket_cont_one_prod_w_skills,
+    "PickToBasketContStarsEnv": solve_r1_pick_to_basket_cont_one_prod_w_skills,
+    "PickToBasketContFantaEnv": solve_r1_pick_to_basket_cont_one_prod_w_skills,
+
+    "MoveFromBoardToBoardVanishContEnv": solve_r1_move_to_board_cont_one_prod_w_skills,
+    "MoveFromBoardToBoardNestleContEnv": solve_r1_move_to_board_cont_one_prod_w_skills,
+    "MoveFromBoardToBoardDuffContEnv": solve_r1_move_to_board_cont_one_prod_w_skills,
+
+    "PickFromFloorSlamContEnv": solve_r1_pick_from_floor_cont,
+    "PickFromFloorBeansContEnv": solve_r1_pick_from_floor_cont,
+}
