@@ -1,13 +1,17 @@
 #!/bin/bash
 # Build per-SKILL LeRobot datasets from generated_data/ trajectories.
 #
-#   Step 1: replay each generated h5 with --obs-mode rgbd (renders camera images,
-#           which motion planning does NOT store). Handles multi-proc subdirs
-#           (traj.0/, traj.1/, ...). Skips files already replayed.
-#   Step 2: convert each SKILL (merging its products) into one LeRobot dataset,
-#           capping episodes per product (MAX_PER_ITEM).
+# STREAMING design (low disk footprint): process ONE skill end-to-end before the
+# next -- replay its items to rgbd, convert to a LeRobot dataset, then DELETE that
+# skill's rgbd intermediates. Peak disk = one skill's rgbd, not all skills' at once.
 #
-# Run AFTER run_mp_vla_training.sh. Idempotent: re-running skips done replays.
+#   Per skill:
+#     1. replay each item's first MAX_PER_ITEM trajectories with --obs-mode rgbd
+#     2. convert the skill (merging its products) into one LeRobot dataset
+#     3. delete the skill's *.rgbd.*.h5 + *.replay.log  (ONLY if convert succeeded)
+#
+# Idempotent: a skill whose dataset already exists is skipped; rgbd is kept when
+# convert fails so you can retry. Run AFTER run_mp_vla_training.sh.
 
 set -e
 
@@ -35,23 +39,15 @@ PICK_FROM_FLOOR=(
   "PickFromFloorSlamContEnv|pick slam from floor and place in basket"
 )
 
-ALL_ITEMS=("${PICK_TO_BASKET[@]}" "${RESTOCK[@]}" "${PICK_FROM_FLOOR[@]}")
-
-# ---- Step 1: replay each item's first MAX_PER_ITEM trajectories with rgbd ----
-# replay_trajectory.py has no --num-procs, so we parallelize at the bash level.
-# IMPORTANT: each replay process uses ~4-4.5GB RAM (measured), so concurrency is
-# memory-bound. Default REPLAY_JOBS = free_GB / 5 (clamped [1,4]); override via env.
-# We cap replays PER ITEM at MAX_PER_ITEM *before* rendering (using --count across
-# shards), matching what the converter later selects -- no wasted rendering.
+# ---- concurrency: each replay proc uses ~4.5GB RAM; default = free_GB/5 ----
 if [ -z "${REPLAY_JOBS:-}" ]; then
   _free_gb=$(free -g | awk '/Mem/{print $7}')
   REPLAY_JOBS=$(( _free_gb / 5 )); [ "$REPLAY_JOBS" -lt 1 ] && REPLAY_JOBS=1
-  [ "$REPLAY_JOBS" -gt 4 ] && REPLAY_JOBS=4
+  [ "$REPLAY_JOBS" -gt 8 ] && REPLAY_JOBS=8
   echo "  auto REPLAY_JOBS=$REPLAY_JOBS (free=${_free_gb}GB, ~4.5GB each)"
 fi
-echo "===== Step 1: replay (parallel x$REPLAY_JOBS, <=$MAX_PER_ITEM traj/item) ====="
 
-# replay_one <h5> <count>: render first <count> trajectories of this shard.
+# replay_one <h5> <count>: render first <count> trajectories of this shard to rgbd.
 replay_one() {
   local h5="$1" count="$2" base="${1%.h5}"
   if ls "${base}".rgbd.*.h5 >/dev/null 2>&1; then
@@ -65,21 +61,19 @@ replay_one() {
 export -f replay_one
 export P
 
-# For each item (env), walk its shards in sorted order and dispatch replays until
-# MAX_PER_ITEM trajectories are covered, then stop -- later shards are skipped.
-# Shard episode counts come from each shard's .json (episodes list length).
+# shard_eps <h5>: episode count from the shard's sibling .json
 shard_eps() { $P -c \
   "import json,sys;print(len(json.load(open(sys.argv[1]))['episodes']))" "${1%.h5}.json" 2>/dev/null || echo 0; }
 
-for item in "${ALL_ITEMS[@]}"; do
-  IFS='|' read -r ENV _ <<< "$item"
-  [ -d "$OUTPUT_ROOT/$ENV" ] || { echo "  skip (no dir): $ENV"; continue; }
-  remaining=$MAX_PER_ITEM
+# replay_item <ENV>: replay up to MAX_PER_ITEM trajectories for one product, in parallel.
+replay_item() {
+  local ENV="$1"
+  [ -d "$OUTPUT_ROOT/$ENV" ] || { echo "  skip (no dir): $ENV"; return 0; }
+  local remaining=$MAX_PER_ITEM
   while IFS= read -r h5; do
     [ -z "$h5" ] && continue
-    if [ "$remaining" -le 0 ]; then
-      echo "  cap reached for $ENV, skipping: $h5"; continue
-    fi
+    [ "$remaining" -le 0 ] && { echo "  cap reached for $ENV, skipping: $h5"; continue; }
+    local eps take
     eps=$(shard_eps "$h5")
     take=$(( remaining < eps ? remaining : eps ))
     [ "$take" -le 0 ] && continue
@@ -87,32 +81,63 @@ for item in "${ALL_ITEMS[@]}"; do
     remaining=$(( remaining - take ))
     while [ "$(jobs -rp | wc -l)" -ge "$REPLAY_JOBS" ]; do wait -n; done
   done < <(find "$OUTPUT_ROOT/$ENV" -name "*.h5" ! -name "*.rgbd.*" 2>/dev/null | sort)
-done
-wait
-echo "  Step 1 complete."
+}
 
-# ---- Step 2: convert each skill (merge its products) into one dataset ----
-echo "===== Step 2: convert to per-skill LeRobot datasets ====="
-
+# convert_skill <skill_name> <item...>: merge a skill's products into one dataset.
+# Returns nonzero if the converter fails (so the caller keeps rgbd for retry).
 convert_skill() {
   local skill_name="$1"; shift
-  local -a items=("$@")
-  local -a args=()
+  local -a items=("$@") args=()
+  local it ENV TASK
   for it in "${items[@]}"; do
     IFS='|' read -r ENV TASK <<< "$it"
     args+=(--item "$OUTPUT_ROOT/$ENV|$TASK")
   done
-  echo "----- $skill_name -----"
+  echo "  converting -> $DATASET_BASE/$skill_name"
   $P scripts/convert_skill_to_lerobot.py \
       --output-dir "$DATASET_BASE/$skill_name" \
       "${args[@]}" \
       --max-per-item "$MAX_PER_ITEM" --fps "$FPS"
 }
 
-convert_skill "pick_to_basket"            "${PICK_TO_BASKET[@]}"
-convert_skill "restock_basket_to_shelf"   "${RESTOCK[@]}"
-convert_skill "pick_from_floor"           "${PICK_FROM_FLOOR[@]}"
+# cleanup_skill <item...>: delete the skill's rgbd intermediates + replay logs.
+cleanup_skill() {
+  local it ENV
+  for it in "$@"; do
+    IFS='|' read -r ENV _ <<< "$it"
+    find "$OUTPUT_ROOT/$ENV" \( -name "*.rgbd.*.h5" -o -name "*.replay.log" \) \
+      -delete 2>/dev/null
+  done
+}
+
+# process_skill <skill_name> <item...>: STREAM one skill end-to-end.
+process_skill() {
+  local skill_name="$1"; shift
+  local -a items=("$@")
+  local it ENV
+  echo "===== Skill: $skill_name ====="
+  if [ -f "$DATASET_BASE/$skill_name/meta/info.json" ]; then
+    echo "  already built, skipping: $DATASET_BASE/$skill_name"; return 0
+  fi
+  echo "  -- replay (parallel x$REPLAY_JOBS, <=$MAX_PER_ITEM traj/item) --"
+  for it in "${items[@]}"; do
+    IFS='|' read -r ENV _ <<< "$it"
+    replay_item "$ENV"
+  done
+  wait
+  echo "  -- convert --"
+  if convert_skill "$skill_name" "${items[@]}"; then
+    echo "  -- cleanup rgbd intermediates for $skill_name --"
+    cleanup_skill "${items[@]}"
+  else
+    echo "  CONVERT FAILED for $skill_name -- keeping rgbd for retry"
+    return 1
+  fi
+}
+
+process_skill "pick_to_basket"          "${PICK_TO_BASKET[@]}"
+process_skill "restock_basket_to_shelf" "${RESTOCK[@]}"
+process_skill "pick_from_floor"         "${PICK_FROM_FLOOR[@]}"
 
 echo "===== Done. Datasets at: $DATASET_BASE ====="
 find "$DATASET_BASE" -maxdepth 2 -name info.json -exec dirname {} \; 2>/dev/null
-
