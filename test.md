@@ -31,3 +31,7 @@ $P scripts/run_mp.py -e PickFromFloorBeansContEnv --scene-dir demo_envs/pick_fro
 $P scripts/run_mp.py -e PickFromFloorFantaContEnv --scene-dir demo_envs/pick_from_floor -n 1 -b cpu
 $P scripts/run_mp.py -e PickFromFloorDuffContEnv  --scene-dir demo_envs/pick_from_floor -n 1 -b cpu
 
+
+MAX_PER_ITEM=30 REPLAY_JOBS=8 nohup bash bash/build_skill_datasets.sh > generated_data/build.log 2>&1
+
+watch -n 5 bash bash/replay_progress.sh

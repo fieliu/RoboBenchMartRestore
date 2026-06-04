@@ -218,12 +218,122 @@ def _write_meta(output_dir: Path, fps, total_frames, total_episodes, task_to_ind
     return meta_dir
 
 
+def _ensure_dataset_dirs(output_dir: Path):
+    """Create data/video/frag dirs without wiping (append-safe)."""
+    data_dir = output_dir / "data" / "chunk-000"
+    video_dir = output_dir / "videos" / "chunk-000"
+    frag_dir = output_dir / "meta" / "_fragments"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    frag_dir.mkdir(parents=True, exist_ok=True)
+    for ck in ["head_rgb", "left_wrist_rgb", "right_wrist_rgb"]:
+        (video_dir / f"observation.images.{ck}").mkdir(parents=True, exist_ok=True)
+    return data_dir, video_dir, frag_dir
+
+
+def convert_single(h5_path, output_dir, episode_index, task, task_index, fps):
+    """Convert ONE replayed rgbd h5 (single traj_0) into a dataset, APPEND-style.
+
+    Uses a pre-assigned global episode_index + task_index so parallel processes
+    never collide. Writes episode_{idx}.parquet + 3 mp4s + a meta fragment.
+    Global frame `index` is fixed up later by --finalize. Returns True on success.
+    """
+    output_dir = Path(output_dir)
+    data_dir, video_dir, frag_dir = _ensure_dataset_dirs(output_dir)
+    with h5py.File(h5_path, "r") as f:
+        tids = [k for k in f if k.startswith("traj_")]
+        if not tids:
+            print(f"  no traj in {h5_path}"); return False
+        traj = f[tids[0]]
+        try:
+            state, action, head, wrist = extract_episode(traj)
+        except Exception as e:
+            print(f"  skip {h5_path}: {e}"); return False
+        T = len(action)
+        if T < 2:
+            print(f"  skip {h5_path}: too short (T={T})"); return False
+        ep_task = read_instruction(traj) or task
+        dims = {"head": [head.shape[1], head.shape[2]],
+                "wrist": [wrist.shape[1], wrist.shape[2]]}
+        ep = f"episode_{episode_index:06d}"
+        encode_frames_to_mp4(head, video_dir / "observation.images.head_rgb" / f"{ep}.mp4", fps)
+        lw = video_dir / "observation.images.left_wrist_rgb" / f"{ep}.mp4"
+        encode_frames_to_mp4(wrist, lw, fps)
+        shutil.copy2(lw, video_dir / "observation.images.right_wrist_rgb" / f"{ep}.mp4")
+        write_parquet({
+            "observation.state": state,
+            "action": action,
+            "episode_index": np.full(T, episode_index, dtype=np.int64),
+            "frame_index": np.arange(T, dtype=np.int64),
+            "index": np.arange(T, dtype=np.int64),           # local; finalize fixes to global
+            "timestamp": (np.arange(T, dtype=np.float32) / fps),
+            "task_index": np.full(T, task_index, dtype=np.int64),
+        }, data_dir / f"{ep}.parquet")
+        frag = {"episode_index": episode_index, "tasks": [ep_task], "length": int(T),
+                "task_index": task_index, "dims": dims, "fps": fps}
+        (frag_dir / f"{episode_index:06d}.json").write_text(json.dumps(frag))
+    return True
+
+
+def finalize_dataset(output_dir: Path, fps: int):
+    """Merge per-episode fragments into LeRobot meta + fix global frame `index`.
+
+    Run ONCE after all convert_single calls for a dataset are done. Reads
+    meta/_fragments/*.json, assigns contiguous task indices, rewrites each
+    parquet's global `index` column, writes info.json/episodes.jsonl/tasks.jsonl.
+    """
+    output_dir = Path(output_dir)
+    frag_dir = output_dir / "meta" / "_fragments"
+    data_dir = output_dir / "data" / "chunk-000"
+    frags = sorted(frag_dir.glob("*.json"), key=lambda p: int(p.stem))
+    if not frags:
+        print(f"  finalize: no fragments in {output_dir}"); return 0
+    eps = [json.loads(p.read_text()) for p in frags]
+
+    # contiguous task indices in first-seen order
+    task_to_index, remap = {}, {}
+    for e in eps:
+        t = e["tasks"][0]
+        if t not in task_to_index:
+            task_to_index[t] = len(task_to_index)
+        remap[e["episode_index"]] = task_to_index[t]
+
+    # fix global frame `index` across episodes (parquet sorted by episode_index)
+    total_frames, episode_meta = 0, []
+    dims = {"head": list(HEAD_HW), "wrist": list(WRIST_HW)}
+    for e in eps:
+        idx = e["episode_index"]; T = e["length"]; dims = e.get("dims", dims)
+        pq_path = data_dir / f"episode_{idx:06d}.parquet"
+        if pq_path.exists():
+            tbl = pq.read_table(pq_path).to_pydict()
+            tbl["index"] = list(range(total_frames, total_frames + T))
+            tbl["task_index"] = [remap[idx]] * T
+            pq.write_table(pa.table(tbl), pq_path)
+        episode_meta.append({"episode_index": idx, "tasks": e["tasks"], "length": T})
+        total_frames += T
+
+    _write_meta(output_dir, fps, total_frames, len(eps), task_to_index, dims)
+    with open(output_dir / "meta" / "episodes.jsonl", "w") as f:
+        for ep in episode_meta:
+            f.write(json.dumps(ep, ensure_ascii=False) + "\n")
+    print(f"  finalize {output_dir.name}: {len(eps)} episodes, {total_frames} frames, "
+          f"{len(task_to_index)} tasks")
+    return len(eps)
+
+
 def parse_args():
     p = argparse.ArgumentParser(
         description="Convert RoboBenchMart rgbd h5 to a per-skill LeRobot dataset")
-    p.add_argument("--output-dir", required=True, help="Skill dataset output dir")
-    p.add_argument("--item", action="append", required=True, dest="items",
+    p.add_argument("--output-dir", required=True, help="Dataset output dir")
+    # mode A: whole-skill (legacy) -- needs --item
+    p.add_argument("--item", action="append", dest="items",
                    help="'<env_dir>|<fallback_task>' (repeatable, one per product)")
+    # mode B: single trajectory append (streaming) -- needs the 4 below
+    p.add_argument("--single-h5", help="one replayed rgbd h5 to append as one episode")
+    p.add_argument("--episode-index", type=int, help="pre-assigned global episode index")
+    p.add_argument("--task", help="fallback task instruction for --single-h5")
+    p.add_argument("--task-index", type=int, default=0, help="pre-assigned task index")
+    # mode C: finalize merged fragments into LeRobot meta
+    p.add_argument("--finalize", action="store_true", help="merge fragments -> final meta")
     p.add_argument("--max-per-item", type=int, default=30)
     p.add_argument("--fps", type=int, default=15)
     return p.parse_args()
@@ -231,13 +341,22 @@ def parse_args():
 
 def main():
     args = parse_args()
-    items = []
-    for spec in args.items:
-        env_dir, _, task = spec.partition("|")
-        items.append((env_dir.strip(), task.strip()))
     output_dir = Path(args.output_dir)
-    convert_skill(items, output_dir, args.max_per_item, args.fps)
-    print(f"Done: {output_dir}")
+    if args.finalize:
+        finalize_dataset(output_dir, args.fps)
+    elif args.single_h5:
+        ok = convert_single(args.single_h5, output_dir, args.episode_index,
+                            args.task or "", args.task_index, args.fps)
+        raise SystemExit(0 if ok else 1)
+    elif args.items:
+        items = []
+        for spec in args.items:
+            env_dir, _, task = spec.partition("|")
+            items.append((env_dir.strip(), task.strip()))
+        convert_skill(items, output_dir, args.max_per_item, args.fps)
+        print(f"Done: {output_dir}")
+    else:
+        raise SystemExit("need one of: --item / --single-h5 / --finalize")
 
 
 if __name__ == "__main__":
