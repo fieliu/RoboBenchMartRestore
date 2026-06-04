@@ -63,29 +63,37 @@ def collect_tasks(split_root: Path, out_root: Path, per_scene: int, fps: int):
 
 
 def process_one(job):
-    """ONE trajectory: replay -> convert_single (append) -> delete rgbd. Worker-safe."""
+    """ONE trajectory: replay -> convert_single (append) -> delete rgbd. Worker-safe.
+
+    Replay's tqdm frame progress is streamed to <base>.replay.log so a watcher
+    (bash/build_progress.sh) can show per-trajectory frame extraction live. The
+    log is deleted on success, kept on failure for debugging.
+    """
     h5 = Path(job["h5"])
-    base = str(h5)[:-3]  # strip .h5
-    # 1. replay to rgbd (writes <base>.rgbd.*.h5 beside the source)
-    r = subprocess.run(
-        [PY, str(ROOT / "scripts/replay_trajectory.py"), "--traj-path", str(h5),
-         "-b", "cpu", "-o", "rgbd", "--save-traj", "--allow-failure"],
-        capture_output=True, text=True)
+    log_path = h5.parent / f"{h5.stem}.replay.log"
+    # 1. replay to rgbd; stream progress to the per-traj log (visible to watcher)
+    with open(log_path, "w") as lf:
+        r = subprocess.run(
+            [PY, str(ROOT / "scripts/replay_trajectory.py"), "--traj-path", str(h5),
+             "-b", "cpu", "-o", "rgbd", "--save-traj", "--allow-failure"],
+            stdout=lf, stderr=subprocess.STDOUT, text=True)
     rgbd = sorted(h5.parent.glob(f"{h5.stem}.rgbd.*.h5"))
     if r.returncode != 0 or not rgbd:
         return ("FAIL_REPLAY", job["ep"], job["h5"])
     rgbd_path = rgbd[0]
     # 2. convert_single (append one episode with pre-assigned indices)
-    c = subprocess.run(
-        [PY, str(ROOT / "scripts/convert_skill_to_lerobot.py"),
-         "--output-dir", job["out"], "--single-h5", str(rgbd_path),
-         "--episode-index", str(job["ep"]), "--task", job["task"],
-         "--task-index", str(job["task_idx"]), "--fps", str(job["fps"])],
-        capture_output=True, text=True)
+    with open(log_path, "a") as lf:
+        c = subprocess.run(
+            [PY, str(ROOT / "scripts/convert_skill_to_lerobot.py"),
+             "--output-dir", job["out"], "--single-h5", str(rgbd_path),
+             "--episode-index", str(job["ep"]), "--task", job["task"],
+             "--task-index", str(job["task_idx"]), "--fps", str(job["fps"])],
+            stdout=lf, stderr=subprocess.STDOUT, text=True)
     # 3. delete rgbd intermediate (always; source split h5 is kept)
     rgbd_path.unlink(missing_ok=True)
     if c.returncode != 0:
         return ("FAIL_CONVERT", job["ep"], job["h5"])
+    log_path.unlink(missing_ok=True)  # success: drop log, watcher shows in-flight only
     return ("OK", job["ep"], job["h5"])
 
 
