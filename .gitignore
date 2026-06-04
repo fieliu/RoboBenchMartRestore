@@ -19,6 +19,7 @@ demo_envs_mp
 *.h5
 *.jpg
 *.csv
+datasets/*
 
 # generated logs / intermediate artifacts
 *.log

@@ -11,8 +11,8 @@
 
 set -e
 
-P=${PYTHON:-/home/lh/software/miniconda3/envs/robort_mart/bin/python}
-RB_ROOT=${RB_ROOT:-/home/lh/VLA/RoboBenchMart-main}
+P=${PYTHON:-python}
+RB_ROOT=${RB_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}
 OUTPUT_ROOT=${OUTPUT_ROOT:-generated_data}
 DATASET_BASE=${DATASET_BASE:-datasets/warehouse_fetch}
 MAX_PER_ITEM=${MAX_PER_ITEM:-30}
@@ -68,7 +68,7 @@ export P
 # For each item (env), walk its shards in sorted order and dispatch replays until
 # MAX_PER_ITEM trajectories are covered, then stop -- later shards are skipped.
 # Shard episode counts come from each shard's .json (episodes list length).
-shard_eps() { /home/lh/software/miniconda3/envs/robort_mart/bin/python -c \
+shard_eps() { $P -c \
   "import json,sys;print(len(json.load(open(sys.argv[1]))['episodes']))" "${1%.h5}.json" 2>/dev/null || echo 0; }
 
 for item in "${ALL_ITEMS[@]}"; do
