@@ -72,10 +72,15 @@ say "Step 4: 安装项目依赖 (清华源)"
 grep -vE "^torch$|^torchvision$" requirements.txt > /tmp/req_no_torch.txt
 pip install -r /tmp/req_no_torch.txt
 pip install mani_skill==3.0.1 mplib==0.2.1 sapien==3.0.3 diffusers==0.33.1
+# Pin numpy<2: toppra/mplib are compiled against NumPy 1.x; numpy 2.x breaks
+# them with "numpy.core.multiarray failed to import". Install last so nothing
+# pulls 2.x back in.
+pip install "numpy==1.26.4"
 python - <<'PY' || fail "核心库导入失败"
-import mani_skill, sapien, mplib, diffusers
-print("  mani_skill", mani_skill.__version__, "sapien", sapien.__version__,
-      "mplib", mplib.__version__, "diffusers", diffusers.__version__)
+import numpy, mani_skill, sapien, mplib, diffusers
+print("  numpy", numpy.__version__, "mani_skill", mani_skill.__version__,
+      "sapien", sapien.__version__, "mplib", mplib.__version__,
+      "diffusers", diffusers.__version__)
 PY
 ok "核心库就绪"
 

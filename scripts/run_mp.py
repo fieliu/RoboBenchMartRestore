@@ -46,6 +46,7 @@ def parse_args(args=None):
     parser.add_argument("--num-procs", type=int, default=1, help="Number of processes to use to help parallelize the trajectory replay process. This uses CPU multiprocessing and only works with the CPU simulation backend at the moment.")
     parser.add_argument("--env-kwargs", type=str, default=None, help="Extra env kwargs as a JSON object, forwarded to gym.make. e.g. '{\"num_basket_distractors\": 3}'")
     parser.add_argument("--no-retry", action="store_true", help="Run the solver exactly once (no retry loop) and force-save the video regardless of success/failure. For debugging what goes wrong.")
+    parser.add_argument("--output-root", type=str, default=None, help="Root dir for generated trajectories. Default: <scene-dir>/demos. Set this to keep generated data out of the scene/demo_envs dir, e.g. generated_data/.")
     return parser.parse_args()
 
 
@@ -91,7 +92,10 @@ def _main(args, proc_id=0):
     if args.num_procs > 1:
         new_traj_name = new_traj_name + "." + str(proc_id)
 
-    output_dir = osp.join(scene_dir, "demos", env_id, new_traj_name)
+    if args.output_root:
+        output_dir = osp.join(args.output_root, env_id, new_traj_name)
+    else:
+        output_dir = osp.join(scene_dir, "demos", env_id, new_traj_name)
 
     env = RecordEpisode(
         env,

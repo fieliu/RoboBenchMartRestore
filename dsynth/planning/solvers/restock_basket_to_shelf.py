@@ -18,6 +18,7 @@ from dsynth.planning.utils import (
 )
 from dsynth.planning.fetch_skills import (
     align_to_target_pose,
+    place_object_to_pos,
     look_at_target,
     reset_head,
 )
