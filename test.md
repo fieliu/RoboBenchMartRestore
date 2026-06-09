@@ -35,3 +35,6 @@ $P scripts/run_mp.py -e PickFromFloorDuffContEnv  --scene-dir demo_envs/pick_fro
 MAX_PER_ITEM=30 REPLAY_JOBS=8 nohup bash bash/build_skill_datasets.sh > generated_data/build.log 2>&1
 
 watch -n 5 bash bash/replay_progress.sh
+
+nohup python scripts/build_dataset_mp.py --split-root split_data --out datasets/warehouse_fetch --jobs 6 --per-scene 30 --fps 15 > split_data/build.log 2>&1 &
+watch -n 5 bash bash/build_progress.sh

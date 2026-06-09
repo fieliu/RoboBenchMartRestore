@@ -106,7 +106,11 @@ def draw_robot_arrow(ax, x, y, angle_deg=0, length=0.6, color='#ff6600'):
             zorder=11)
 
 
-def generate_map(scene_dir, output_path=None, robot_angle=0):
+def generate_map(scene_dir, output_path=None, robot_angle=0,
+                 robot_pos=None, active_pos=None, title=None,
+                 show_zones=True, show_coord_table=True, nav_path=None,
+                 return_fig=False, nav_nodes=None,
+                 nav_path2=None, nav_edges=None):
     data = load_layout(scene_dir)
     ld = data['layout_data']
     size_x = data['size_x']
@@ -118,8 +122,8 @@ def generate_map(scene_dir, output_path=None, robot_angle=0):
     ax.set_aspect('equal')
     ax.set_xlabel('X (meters)', fontsize=14, fontweight='bold')
     ax.set_ylabel('Y (meters)', fontsize=14, fontweight='bold')
-    ax.set_title('Restock Scene — Top-Down Map for Path Planning\n'
-                 '(1:1 scale, all coordinates in meters)',
+    ax.set_title((title or 'Restock Scene — Top-Down Map for Path Planning') +
+                 '\n(1:1 scale, all coordinates in meters)',
                  fontsize=18, fontweight='bold', pad=20)
 
     ax.set_facecolor('#f5f0e8')
@@ -142,25 +146,26 @@ def generate_map(scene_dir, output_path=None, robot_angle=0):
         ax.text(-0.55, y_val, f'{y_val}m', ha='right', va='center', fontsize=9,
                 color='#666', fontweight='bold')
 
-    comm_bg = FancyBboxPatch((-0.1, -0.1), 10.2, size_y + 0.2,
-                              boxstyle="round,pad=0.05",
-                              facecolor='#e8f0e8', edgecolor='#4a7c4a',
-                              linewidth=2.5, alpha=0.25)
-    ax.add_patch(comm_bg)
-    ax.text(5.0, size_y + 0.15, 'COMMERCIAL AREA (x: 0~10m)',
-            ha='center', va='bottom', fontsize=14, color='#2a5c2a', fontweight='bold',
-            bbox=dict(boxstyle='round,pad=0.3', facecolor='#c8e8c8', alpha=0.7, edgecolor='#4a7c4a'))
+    if show_zones:
+        comm_bg = FancyBboxPatch((-0.1, -0.1), 10.2, size_y + 0.2,
+                                  boxstyle="round,pad=0.05",
+                                  facecolor='#e8f0e8', edgecolor='#4a7c4a',
+                                  linewidth=2.5, alpha=0.25)
+        ax.add_patch(comm_bg)
+        ax.text(5.0, size_y + 0.15, 'COMMERCIAL AREA (x: 0~10m)',
+                ha='center', va='bottom', fontsize=14, color='#2a5c2a', fontweight='bold',
+                bbox=dict(boxstyle='round,pad=0.3', facecolor='#c8e8c8', alpha=0.7, edgecolor='#4a7c4a'))
 
-    wh_bg = FancyBboxPatch((9.9, -0.1), 6.2, size_y + 0.2,
-                            boxstyle="round,pad=0.05",
-                            facecolor='#e8e0f0', edgecolor='#5a4a7c',
-                            linewidth=2.5, alpha=0.25)
-    ax.add_patch(wh_bg)
-    ax.text(13.0, size_y + 0.15, 'WAREHOUSE AREA (x: 10~16m)',
-            ha='center', va='bottom', fontsize=14, color='#3a2a5c', fontweight='bold',
-            bbox=dict(boxstyle='round,pad=0.3', facecolor='#d8c8e8', alpha=0.7, edgecolor='#5a4a7c'))
+        wh_bg = FancyBboxPatch((9.9, -0.1), 6.2, size_y + 0.2,
+                                boxstyle="round,pad=0.05",
+                                facecolor='#e8e0f0', edgecolor='#5a4a7c',
+                                linewidth=2.5, alpha=0.25)
+        ax.add_patch(wh_bg)
+        ax.text(13.0, size_y + 0.15, 'WAREHOUSE AREA (x: 10~16m)',
+                ha='center', va='bottom', fontsize=14, color='#3a2a5c', fontweight='bold',
+                bbox=dict(boxstyle='round,pad=0.3', facecolor='#d8c8e8', alpha=0.7, edgecolor='#5a4a7c'))
 
-    ax.axvline(x=10.0, color='#ff4444', linewidth=3, linestyle='--', alpha=0.7)
+        ax.axvline(x=10.0, color='#ff4444', linewidth=3, linestyle='--', alpha=0.7)
 
     wall_color = '#8B4513'
     wall_lw = 3.5
@@ -173,6 +178,10 @@ def generate_map(scene_dir, output_path=None, robot_angle=0):
     comm_shelf_dark = '#2a4a6a'
 
     comm_active = ld['active_shelvings'][0]
+    # active 货架在 layout JSON 里常是占位 (0,0); 若调用方传入 sim 真实坐标则修正
+    if active_pos is not None:
+        comm_active = dict(comm_active)
+        comm_active['x'], comm_active['y'] = float(active_pos[0]), float(active_pos[1])
     draw_shelf_rect(ax, comm_active['x'], comm_active['y'],
                     comm_active['l'], comm_active['w'],
                     comm_active['orientation'],
@@ -212,12 +221,14 @@ def generate_map(scene_dir, output_path=None, robot_angle=0):
     row_colors = {
         'row_A_drinks': ('#c0392b', '#922b21', '[A] DRINKS'),
         'row_B_food':   ('#27ae60', '#1e8449', '[B] FOOD'),
+        'row_B_daily':  ('#27ae60', '#1e8449', '[B] DAILY'),
         'row_C_daily':  ('#2980b9', '#1f618d', '[C] DAILY'),
     }
 
     row_product_labels = {
         'row_A_drinks': ['Beer', 'Soda', 'Juice'],
         'row_B_food':   ['Coffee', 'Milk', 'Cereal'],
+        'row_B_daily':  ['BodyCare', 'Detergent', 'Paper'],
         'row_C_daily':  ['BodyCare', 'Detergent', 'Paper'],
     }
 
@@ -293,7 +304,10 @@ def generate_map(scene_dir, output_path=None, robot_angle=0):
                 bbox=dict(boxstyle='round,pad=0.15', facecolor='white',
                           alpha=0.7, edgecolor='#8a7a5a'))
 
-    robot_x, robot_y = 11.0, 5.0
+    if robot_pos is not None:
+        robot_x, robot_y = float(robot_pos[0]), float(robot_pos[1])
+    else:
+        robot_x, robot_y = 11.0, 5.0
     draw_robot_arrow(ax, robot_x, robot_y, angle_deg=robot_angle, length=0.7)
 
     ax.text(5.0, 0.25, '2m Main Passage', ha='center', va='bottom', fontsize=9,
@@ -319,73 +333,77 @@ def generate_map(scene_dir, output_path=None, robot_angle=0):
         plt.Line2D([0], [0], color='#ff4444', linewidth=2.5, linestyle='--',
                    label='Zone Boundary (x=10m)'),
     ]
-    ax.legend(handles=legend_elements, loc='lower left', fontsize=9,
+    # Legend 放到地图右侧外部, 不再叠加遮挡地图
+    ax.legend(handles=legend_elements, loc='upper left',
+              bbox_to_anchor=(1.02, 1.0), fontsize=9,
               framealpha=0.9, edgecolor='#888', fancybox=True,
-              title='LEGEND', title_fontsize=11)
+              title='LEGEND', title_fontsize=11, borderaxespad=0.0)
 
-    coord_info = (
-        "COORDINATE SYSTEM\n"
-        "============================\n"
-        "Origin: bottom-left corner\n"
-        "X axis: -> (0~16m)\n"
-        "Y axis: ^  (0~10m)\n"
-        "Unit:  meters\n"
-        "============================\n"
-        "Shelf ID format:\n"
-        "  CS-N   = Commercial Shelf\n"
-        "  A-C0~3 = Warehouse Drinks\n"
-        "  B-C0~3 = Warehouse Food\n"
-        "  C-C0~3 = Warehouse Daily\n"
-        "============================\n"
-        "Each shelf shows:\n"
-        "  Line1: Shelf ID\n"
-        "  Line2: (x, y) center coord\n"
-        "============================\n"
-        "Robot arrow = heading dir\n"
-        "  0 deg = right (+X)\n"
-        "  90 deg = up (+Y)"
-    )
-    ax.text(size_x + 0.5, size_y, coord_info,
-            ha='left', va='top', fontsize=8, fontfamily='monospace',
-            bbox=dict(boxstyle='round,pad=0.5', facecolor='lightyellow',
-                      alpha=0.95, edgecolor='#888'))
+    if show_zones:
+        coord_info = (
+            "COORDINATE SYSTEM\n"
+            "============================\n"
+            "Origin: bottom-left corner\n"
+            "X axis: -> (0~16m)\n"
+            "Y axis: ^  (0~10m)\n"
+            "Unit:  meters\n"
+            "============================\n"
+            "Shelf ID format:\n"
+            "  CS-N   = Commercial Shelf\n"
+            "  A-C0~3 = Warehouse Drinks\n"
+            "  B-C0~3 = Warehouse Food\n"
+            "  C-C0~3 = Warehouse Daily\n"
+            "============================\n"
+            "Each shelf shows:\n"
+            "  Line1: Shelf ID\n"
+            "  Line2: (x, y) center coord\n"
+            "============================\n"
+            "Robot arrow = heading dir\n"
+            "  0 deg = right (+X)\n"
+            "  90 deg = up (+Y)"
+        )
+        ax.text(size_x + 0.5, size_y, coord_info,
+                ha='left', va='top', fontsize=8, fontfamily='monospace',
+                bbox=dict(boxstyle='round,pad=0.5', facecolor='lightyellow',
+                          alpha=0.95, edgecolor='#888'))
 
-    shelf_coords = "SHELF COORDINATE TABLE\n"
-    shelf_coords += "=" * 60 + "\n"
-    shelf_coords += f"{'ID':<10} {'Center(X,Y)':<18} {'X Range':<18} {'Y Range':<18} {'Items'}\n"
-    shelf_coords += "-" * 60 + "\n"
+    if show_coord_table:
+        shelf_coords = "SHELF COORDINATE TABLE\n"
+        shelf_coords += "=" * 60 + "\n"
+        shelf_coords += f"{'ID':<10} {'Center(X,Y)':<18} {'X Range':<18} {'Y Range':<18} {'Items'}\n"
+        shelf_coords += "-" * 60 + "\n"
 
-    shelf_coords += "--- Commercial ---\n"
-    cs_idx = 0
-    ca = comm_active
-    shelf_coords += (f"{'CS-0':<10} ({ca['x']:6.2f}, {ca['y']:5.2f})   "
-                     f"[{ca['x']-ca['l']/2:.2f}, {ca['x']+ca['l']/2:.2f}]   "
-                     f"[{ca['y']-ca['w']/2:.2f}, {ca['y']+ca['w']/2:.2f}]   active\n")
-    for s in ld['inactive_shelvings']:
-        cs_idx += 1
-        shelf_coords += (f"{'CS-'+str(cs_idx):<10} ({s['x']:6.2f}, {s['y']:5.2f})   "
-                         f"[{s['x']-s['l']/2:.2f}, {s['x']+s['l']/2:.2f}]   "
-                         f"[{s['y']-s['w']/2:.2f}, {s['y']+s['w']/2:.2f}]   "
-                         f"{len(get_products_from_arrangement(load_arrangement(scene_dir, s['name'])))}\n")
+        shelf_coords += "--- Commercial ---\n"
+        cs_idx = 0
+        ca = comm_active
+        shelf_coords += (f"{'CS-0':<10} ({ca['x']:6.2f}, {ca['y']:5.2f})   "
+                         f"[{ca['x']-ca['l']/2:.2f}, {ca['x']+ca['l']/2:.2f}]   "
+                         f"[{ca['y']-ca['w']/2:.2f}, {ca['y']+ca['w']/2:.2f}]   active\n")
+        for s in ld['inactive_shelvings']:
+            cs_idx += 1
+            shelf_coords += (f"{'CS-'+str(cs_idx):<10} ({s['x']:6.2f}, {s['y']:5.2f})   "
+                             f"[{s['x']-s['l']/2:.2f}, {s['x']+s['l']/2:.2f}]   "
+                             f"[{s['y']-s['w']/2:.2f}, {s['y']+s['w']/2:.2f}]   "
+                             f"{len(get_products_from_arrangement(load_arrangement(scene_dir, s['name'])))}\n")
 
-    shelf_coords += "--- Warehouse ---\n"
-    for ws in warehouse_shelves:
-        parts = ws['name'].split(':')
-        row_col = parts[1]
-        row_name = '_'.join(row_col.split('_')[:3])
-        col_idx = int(row_col.split('col')[1])
-        short_id = f"{row_name.split('_')[1]}-C{col_idx}"
-        arr = load_arrangement(scene_dir, ws['name'])
-        prods = get_products_from_arrangement(arr)
-        shelf_coords += (f"{short_id:<10} ({ws['x']:6.2f}, {ws['y']:5.2f})   "
-                         f"[{ws['x']-ws['l']/2:.2f}, {ws['x']+ws['l']/2:.2f}]   "
-                         f"[{ws['y']-ws['w']/2:.2f}, {ws['y']+ws['w']/2:.2f}]   "
-                         f"{len(prods)}\n")
+        shelf_coords += "--- Warehouse ---\n"
+        for ws in warehouse_shelves:
+            parts = ws['name'].split(':')
+            row_col = parts[1]
+            row_name = '_'.join(row_col.split('_')[:3])
+            col_idx = int(row_col.split('col')[1])
+            short_id = f"{row_name.split('_')[1]}-C{col_idx}"
+            arr = load_arrangement(scene_dir, ws['name'])
+            prods = get_products_from_arrangement(arr)
+            shelf_coords += (f"{short_id:<10} ({ws['x']:6.2f}, {ws['y']:5.2f})   "
+                             f"[{ws['x']-ws['l']/2:.2f}, {ws['x']+ws['l']/2:.2f}]   "
+                             f"[{ws['y']-ws['w']/2:.2f}, {ws['y']+ws['w']/2:.2f}]   "
+                             f"{len(prods)}\n")
 
-    ax.text(-1.0, -1.0, shelf_coords,
-            ha='left', va='top', fontsize=5.5, fontfamily='monospace',
-            bbox=dict(boxstyle='round,pad=0.3', facecolor='white',
-                      alpha=0.9, edgecolor='#aaa'))
+        ax.text(-1.0, -1.0, shelf_coords,
+                ha='left', va='top', fontsize=5.5, fontfamily='monospace',
+                bbox=dict(boxstyle='round,pad=0.3', facecolor='white',
+                          alpha=0.9, edgecolor='#aaa'))
 
     ax.set_xticks(np.arange(0, size_x + 1, 1))
     ax.set_yticks(np.arange(0, size_y + 1, 1))
@@ -395,6 +413,55 @@ def generate_map(scene_dir, output_path=None, robot_angle=0):
     ax.grid(which='minor', alpha=0.15, linewidth=0.3)
 
     plt.tight_layout()
+
+    # 叠加路网边(世界坐标, 与地图同坐标系): 实际用到的边, 青色细线
+    if nav_edges:
+        for (ax0, ay0), (ax1, ay1) in nav_edges:
+            ax.plot([ax0, ax1], [ay0, ay1], '-', color='#2a9d8f',
+                    linewidth=1.5, alpha=0.7, zorder=18)
+
+    # 叠加导航路径(世界坐标 -> 严格对齐): 第1段(去取货)红色, 第2段(去补货)蓝色
+    def _draw_path(pts, color, off):
+        if not pts:
+            return
+        px = [p[0] for p in pts]
+        py = [p[1] for p in pts]
+        ax.plot(px, py, '-', color=color, linewidth=3, zorder=20)
+        ax.plot(px, py, 'o', color=color, markersize=14, zorder=21)
+        for i, (x, y) in enumerate(pts):
+            ax.annotate(str(off + i + 1), (x, y), color='white', fontsize=11,
+                        ha='center', va='center', zorder=22, fontweight='bold')
+
+    if nav_path:
+        _draw_path(nav_path, 'red', 0)
+    if nav_path2:
+        _draw_path(nav_path2, 'blue', len(nav_path) if nav_path else 0)
+
+    # Draw navigation junction nodes (for VLM node-selection planning)
+    if nav_nodes:
+        from matplotlib.patches import Circle as MplCircle
+        for nd in nav_nodes:
+            x = nd.get('x', nd.get('pos', [0, 0])[0])
+            y = nd.get('y', nd.get('pos', [0, 0])[1])
+            nid = nd.get('id', '?')
+            ntype = nd.get('type', 'node')
+            # Color by type
+            if ntype == 'cross':
+                color, ms = '#e6194b', 16
+            elif ntype == 'rest_area':
+                color, ms = '#ff6600', 18
+            elif ntype == 'goal':
+                color, ms = '#990000', 18
+            else:
+                color, ms = '#ffd700', 12
+            circle = MplCircle((x, y), 0.35, facecolor=color,
+                               edgecolor='white', linewidth=2, zorder=25)
+            ax.add_patch(circle)
+            ax.annotate(nid, (x, y), color='white', fontsize=10,
+                        ha='center', va='center', zorder=26, fontweight='bold')
+
+    if return_fig:
+        return fig, ax, data
 
     if output_path is None:
         output_path = os.path.join(scene_dir, 'top_down_map.png')

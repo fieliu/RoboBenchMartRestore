@@ -137,10 +137,21 @@ class DarkstoreSceneContinuous(DarkstoreScene):
         
         self.env.active_shelves[scene_idx] = []
 
+        # 多个 active 货架时, 各货架 arrangement JSON 里的 shelf_idx 段恒为 0,
+        # 会导致商品 actor 重名 -> sim build 失败。用场景内全局计数器令其唯一。
+        active_shelf_counter = 0
+
+        # 可选: 只激活名字匹配指定子串的货架(其余跳过 -> 不建商品/碰撞, 大幅提速)。
+        # 由 env.STOCKED_SHELF_PATTERNS 控制; None/缺省 = 全部激活(旧行为)。
+        stock_patterns = getattr(self.env, 'STOCKED_SHELF_PATTERNS', None)
+
         for fixture_category in active_fixtures_categories:
             for i, active_fixture in enumerate(scene_data['layout_data'][fixture_category]):
                 shelf_id = active_fixture['asset_name']
                 fixture_name = active_fixture['name']
+                if stock_patterns is not None and \
+                        not any(pat in fixture_name for pat in stock_patterns):
+                    continue
                 item_name = f'[ENV#{scene_idx}]_active_{fixture_name}_{i}'
                 p = np.array([active_fixture['x'], active_fixture['y'], 0.])
                 angle = 0.
@@ -176,9 +187,17 @@ class DarkstoreSceneContinuous(DarkstoreScene):
                         p, q = _get_pq(abs_matrix, [0., 0., 0.])
                         prod_pose = pose * sapien.Pose(p=p, q=q)
                         asset_name = f'products_hierarchy.{obj_name.split(":")[0]}'
-                        item_name = f'[ENV#{scene_idx}]_{obj_name}'
+                        # obj_name = asset:shelf_idx:board:col:row, shelf_idx 段在每个
+                        # 货架 JSON 里恒为 0 -> 多 active 货架时商品 actor 重名。用全局
+                        # active_shelf_counter 覆盖该段, 保持 5 段 ':' 结构(下游解析依赖)。
+                        parts = obj_name.split(':')
+                        parts[1] = str(active_shelf_counter)
+                        unique_obj_name = ':'.join(parts)
+                        item_name = f'[ENV#{scene_idx}]_{unique_obj_name}'
                         actor = self.env.assets_lib[asset_name].ms_build_actor(item_name, self.env.scene, pose=prod_pose, scene_idxs=[scene_idx])
                         self.env.actors["products"][item_name] = actor
+
+                active_shelf_counter += 1
                 
         # origin = - self.IMPORTED_SS_SCENE_SHIFT
 
